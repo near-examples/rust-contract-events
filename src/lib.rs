@@ -18,15 +18,15 @@ NOTES:
 use near_contract_standards::non_fungible_token::metadata::{
     NFTContractMetadata, NonFungibleTokenMetadataProvider, TokenMetadata, NFT_METADATA_SPEC,
 };
-use near_contract_standards::non_fungible_token::{Token, TokenId};
 use near_contract_standards::non_fungible_token::NonFungibleToken;
+use near_contract_standards::non_fungible_token::{Token, TokenId};
 use near_sdk::borsh::{self, BorshDeserialize, BorshSerialize};
 use near_sdk::collections::LazyOption;
 use near_sdk::{
     env, near_bindgen, AccountId, BorshStorageKey, PanicOnDefault, Promise, PromiseOrValue,
 };
 mod event;
-use event::{NftMintData,NearEvent};
+use event::{NearEvent, NftMintData, NftBurnData};
 
 #[near_bindgen]
 #[derive(BorshDeserialize, BorshSerialize, PanicOnDefault)]
@@ -97,15 +97,14 @@ impl Contract {
         receiver_id: AccountId,
         token_metadata: TokenMetadata,
     ) -> Token {
-        let token =self.tokens.internal_mint(token_id.clone(), receiver_id.clone(), Some(token_metadata));
+        let token =
+            self.tokens
+                .internal_mint(token_id.clone(), receiver_id.clone(), Some(token_metadata));
 
-         NearEvent::nft_mint(vec![NftMintData::new(
-            &receiver_id,
-            vec![&token_id],
-            None,
-        )]).emit();
-        token 
+        NearEvent::nft_mint(vec![NftMintData::new(&receiver_id, vec![&token_id], None)]).emit();
+        token
     }
+
 }
 
 near_contract_standards::impl_non_fungible_token_core!(Contract, tokens);
@@ -118,4 +117,3 @@ impl NonFungibleTokenMetadataProvider for Contract {
         self.metadata.get().unwrap()
     }
 }
-
