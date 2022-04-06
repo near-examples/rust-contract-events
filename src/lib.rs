@@ -26,7 +26,7 @@ use near_sdk::{
     env, near_bindgen, AccountId, BorshStorageKey, PanicOnDefault, Promise, PromiseOrValue,
 };
 mod event;
-use event::{NearEvent, NftMintData, NftBurnData};
+use event::{NearEvent, NftBurnData, NftMintData, NftTransferData};
 
 #[near_bindgen]
 #[derive(BorshDeserialize, BorshSerialize, PanicOnDefault)]
@@ -105,6 +105,44 @@ impl Contract {
         token
     }
 
+    #[payable]
+    fn nft_transfer(
+        &mut self,
+        receiver_id: AccountId,
+        token_id: TokenId,
+        approval_id: u64,
+        memo: Option<String>,
+    ) {
+        let old_owner_id = self
+            .tokens
+            .owner_by_id
+            .get(&token_id)
+            .unwrap_or_else(|| env::panic_str("Token not found"));
+        NearEvent::nft_transfer(vec![NftTransferData::new(
+            &old_owner_id,
+            &receiver_id,
+            vec![&token_id],
+            None,
+            memo.as_deref(),
+        )])
+        .emit();
+    }
+
+    #[payable]
+    pub fn nft_burn(&mut self, token_id: Option<TokenId>) {
+        let owner_id = self
+            .tokens
+            .owner_by_id
+            .get(&token_id.as_ref().unwrap())
+            .unwrap_or_else(|| env::panic_str("Token not found"));
+        NearEvent::nft_burn(vec![NftBurnData::new(
+            &owner_id,
+            vec![&token_id.unwrap()],
+            None,
+            None,
+        )])
+        .emit();
+    }
 }
 
 near_contract_standards::impl_non_fungible_token_core!(Contract, tokens);
