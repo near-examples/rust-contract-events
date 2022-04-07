@@ -15,6 +15,7 @@ NOTES:
   - To prevent the deployed contract from being modified or deleted, it should not have any access
     keys on its account.
 */
+use near_contract_standards::non_fungible_token::core::NonFungibleTokenCore;
 use near_contract_standards::non_fungible_token::metadata::{
     NFTContractMetadata, NonFungibleTokenMetadataProvider, TokenMetadata, NFT_METADATA_SPEC,
 };
@@ -23,7 +24,8 @@ use near_contract_standards::non_fungible_token::{Token, TokenId};
 use near_sdk::borsh::{self, BorshDeserialize, BorshSerialize};
 use near_sdk::collections::LazyOption;
 use near_sdk::{
-    env, near_bindgen, AccountId, BorshStorageKey, PanicOnDefault, Promise, PromiseOrValue,
+    assert_one_yocto, env, ext_contract, near_bindgen, require, AccountId, Balance,
+    BorshStorageKey, Gas, PanicOnDefault, Promise, PromiseOrValue,
 };
 mod event;
 use event::{NearEvent, NftBurnData, NftMintData, NftTransferData};
@@ -44,6 +46,152 @@ enum StorageKey {
     TokenMetadata,
     Enumeration,
     Approval,
+}
+
+use std::collections::HashMap;
+
+const GAS_FOR_RESOLVE_TRANSFER: Gas = Gas(5_000_000_000_000);
+const GAS_FOR_NFT_TRANSFER_CALL: Gas = Gas(25_000_000_000_000 + GAS_FOR_RESOLVE_TRANSFER.0);
+
+const NO_DEPOSIT: Balance = 0;
+
+/*#[derive(BorshDeserialize, BorshSerialize)]
+pub struct NonFungibleToken {
+    // owner of contract
+    pub owner_id: AccountId,
+
+    // The storage size in bytes for each new token
+    pub extra_storage_in_bytes_per_token: StorageUsage,
+
+    // always required
+    pub owner_by_id: TreeMap<TokenId, AccountId>,
+
+    // required by metadata extension
+    pub token_metadata_by_id: Option<LookupMap<TokenId, TokenMetadata>>,
+
+    // required by enumeration extension
+    pub tokens_per_owner: Option<LookupMap<AccountId, UnorderedSet<TokenId>>>,
+
+    // required by approval extension
+    pub approvals_by_id: Option<LookupMap<TokenId, HashMap<AccountId, u64>>>,
+    pub next_approval_id_by_id: Option<LookupMap<TokenId, u64>>,
+}*/
+
+#[ext_contract(ext_self)]
+trait NFTResolver {
+    fn nft_resolve_transfer(
+        &mut self,
+        previous_owner_id: AccountId,
+        receiver_id: AccountId,
+        token_id: TokenId,
+        approved_account_ids: Option<HashMap<AccountId, u64>>,
+    ) -> bool;
+}
+
+#[ext_contract(ext_receiver)]
+pub trait NonFungibleTokenReceiver {
+    /// Returns true if token should be returned to `sender_id`
+    fn nft_on_transfer(
+        &mut self,
+        sender_id: AccountId,
+        previous_owner_id: AccountId,
+        token_id: TokenId,
+        msg: String,
+    ) -> PromiseOrValue<bool>;
+}
+
+impl NonFungibleTokenCore for Contract {
+    fn nft_transfer(
+        &mut self,
+        receiver_id: AccountId,
+        token_id: TokenId,
+        approval_id: Option<u64>,
+        memo: Option<String>,
+    ) {
+        assert_one_yocto();
+        let sender_id = env::predecessor_account_id();
+        self.tokens.internal_transfer(
+            &sender_id,
+            &receiver_id,
+            &token_id,
+            approval_id,
+            memo.clone(),
+        );
+
+        // Create a NearEvent
+        let old_owner_id = self
+            .tokens
+            .owner_by_id
+            .get(&token_id)
+            .unwrap_or_else(|| env::panic_str("Token not found"));
+        NearEvent::nft_transfer(vec![NftTransferData::new(
+            &old_owner_id,
+            &receiver_id,
+            vec![&token_id],
+            None,
+            memo.as_deref(),
+        )])
+        .emit();
+    }
+
+    fn nft_transfer_call(
+        &mut self,
+        receiver_id: AccountId,
+        token_id: TokenId,
+        approval_id: Option<u64>,
+        memo: Option<String>,
+        msg: String,
+    ) -> PromiseOrValue<bool> {
+        assert_one_yocto();
+        require!(
+            env::prepaid_gas() > GAS_FOR_NFT_TRANSFER_CALL,
+            "More gas is required"
+        );
+        let sender_id = env::predecessor_account_id();
+        let (old_owner, old_approvals) =
+            self.tokens
+                .internal_transfer(&sender_id, &receiver_id, &token_id, approval_id, memo);
+        // Initiating receiver's call and the callback
+        ext_receiver::nft_on_transfer(
+            sender_id,
+            old_owner.clone(),
+            token_id.clone(),
+            msg,
+            receiver_id.clone(),
+            NO_DEPOSIT,
+            env::prepaid_gas() - GAS_FOR_NFT_TRANSFER_CALL,
+        )
+        .then(ext_self::nft_resolve_transfer(
+            old_owner,
+            receiver_id,
+            token_id,
+            old_approvals,
+            env::current_account_id(),
+            NO_DEPOSIT,
+            GAS_FOR_RESOLVE_TRANSFER,
+        ))
+        .into()
+    }
+
+    fn nft_token(&self, token_id: TokenId) -> Option<Token> {
+        let owner_id = self.tokens.owner_by_id.get(&token_id)?;
+        let metadata = self
+            .tokens
+            .token_metadata_by_id
+            .as_ref()
+            .and_then(|by_id| by_id.get(&token_id));
+        let approved_account_ids = self
+            .tokens
+            .approvals_by_id
+            .as_ref()
+            .and_then(|by_id| by_id.get(&token_id).or_else(|| Some(HashMap::new())));
+        Some(Token {
+            token_id,
+            owner_id,
+            metadata,
+            approved_account_ids,
+        })
+    }
 }
 
 #[near_bindgen]
@@ -82,6 +230,27 @@ impl Contract {
         }
     }
 
+    /*pub fn internal_mint(
+        &mut self,
+        token_id: TokenId,
+        token_owner_id: AccountId,
+        token_metadata: Option<TokenMetadata>,
+    ) -> Token {
+        let token = self.tokens.internal_mint_with_refund(
+            token_id,
+            token_owner_id,
+            token_metadata,
+            Some(env::predecessor_account_id()),
+        );
+        NftMint {
+            owner_id: &token.owner_id,
+            token_ids: &[&token.token_id],
+            memo: None,
+        }
+        .emit();
+        token
+    }*/
+
     /// Mint a new token with ID=`token_id` belonging to `receiver_id`.
     ///
     /// Since this example implements metadata, it also requires per-token metadata to be provided
@@ -101,35 +270,14 @@ impl Contract {
             self.tokens
                 .internal_mint(token_id.clone(), receiver_id.clone(), Some(token_metadata));
 
+        // Create a NearEvent
         NearEvent::nft_mint(vec![NftMintData::new(&receiver_id, vec![&token_id], None)]).emit();
         token
     }
 
     #[payable]
-    fn nft_transfer(
-        &mut self,
-        receiver_id: AccountId,
-        token_id: TokenId,
-        approval_id: u64,
-        memo: Option<String>,
-    ) {
-        let old_owner_id = self
-            .tokens
-            .owner_by_id
-            .get(&token_id)
-            .unwrap_or_else(|| env::panic_str("Token not found"));
-        NearEvent::nft_transfer(vec![NftTransferData::new(
-            &old_owner_id,
-            &receiver_id,
-            vec![&token_id],
-            None,
-            memo.as_deref(),
-        )])
-        .emit();
-    }
-
-    #[payable]
     pub fn nft_burn(&mut self, token_id: Option<TokenId>) {
+        // Create a NearEvent
         let owner_id = self
             .tokens
             .owner_by_id
@@ -145,7 +293,6 @@ impl Contract {
     }
 }
 
-near_contract_standards::impl_non_fungible_token_core!(Contract, tokens);
 near_contract_standards::impl_non_fungible_token_approval!(Contract, tokens);
 near_contract_standards::impl_non_fungible_token_enumeration!(Contract, tokens);
 
