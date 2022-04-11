@@ -9,7 +9,7 @@ near call $CONTRACT new_default_meta '{"owner_id": "'$OWNER_ID'"}' --accountId $
 
 # Examples of events
 
-The smart contract emits an event anytime NFTs were minted, transferred, or burnt. 
+The smart contract emits an event anytime NFTs are minted, transferred, or burnt. 
 
 ## Mint
 ```bash
