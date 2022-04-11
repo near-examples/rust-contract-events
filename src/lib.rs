@@ -55,28 +55,6 @@ const GAS_FOR_NFT_TRANSFER_CALL: Gas = Gas(25_000_000_000_000 + GAS_FOR_RESOLVE_
 
 const NO_DEPOSIT: Balance = 0;
 
-/*#[derive(BorshDeserialize, BorshSerialize)]
-pub struct NonFungibleToken {
-    // owner of contract
-    pub owner_id: AccountId,
-
-    // The storage size in bytes for each new token
-    pub extra_storage_in_bytes_per_token: StorageUsage,
-
-    // always required
-    pub owner_by_id: TreeMap<TokenId, AccountId>,
-
-    // required by metadata extension
-    pub token_metadata_by_id: Option<LookupMap<TokenId, TokenMetadata>>,
-
-    // required by enumeration extension
-    pub tokens_per_owner: Option<LookupMap<AccountId, UnorderedSet<TokenId>>>,
-
-    // required by approval extension
-    pub approvals_by_id: Option<LookupMap<TokenId, HashMap<AccountId, u64>>>,
-    pub next_approval_id_by_id: Option<LookupMap<TokenId, u64>>,
-}*/
-
 #[ext_contract(ext_self)]
 trait NFTResolver {
     fn nft_resolve_transfer(
@@ -100,7 +78,10 @@ pub trait NonFungibleTokenReceiver {
     ) -> PromiseOrValue<bool>;
 }
 
+#[near_bindgen]
 impl NonFungibleTokenCore for Contract {
+
+    #[payable]
     fn nft_transfer(
         &mut self,
         receiver_id: AccountId,
@@ -230,35 +211,6 @@ impl Contract {
         }
     }
 
-    /*pub fn internal_mint(
-        &mut self,
-        token_id: TokenId,
-        token_owner_id: AccountId,
-        token_metadata: Option<TokenMetadata>,
-    ) -> Token {
-        let token = self.tokens.internal_mint_with_refund(
-            token_id,
-            token_owner_id,
-            token_metadata,
-            Some(env::predecessor_account_id()),
-        );
-        NftMint {
-            owner_id: &token.owner_id,
-            token_ids: &[&token.token_id],
-            memo: None,
-        }
-        .emit();
-        token
-    }*/
-
-    /// Mint a new token with ID=`token_id` belonging to `receiver_id`.
-    ///
-    /// Since this example implements metadata, it also requires per-token metadata to be provided
-    /// in this call. `self.tokens.mint` will also require it to be Some, since
-    /// `StorageKey::TokenMetadata` was provided at initialization.
-    ///
-    /// `self.tokens.mint` will enforce `predecessor_account_id` to equal the `owner_id` given in
-    /// initialization call to `new`.
     #[payable]
     pub fn nft_mint(
         &mut self,
@@ -266,6 +218,7 @@ impl Contract {
         receiver_id: AccountId,
         token_metadata: TokenMetadata,
     ) -> Token {
+        // Some implementations are skipped in this example
         let token =
             self.tokens
                 .internal_mint(token_id.clone(), receiver_id.clone(), Some(token_metadata));
@@ -277,6 +230,8 @@ impl Contract {
 
     #[payable]
     pub fn nft_burn(&mut self, token_id: Option<TokenId>) {
+        // Some implementations are skipped in this example
+
         // Create a NearEvent
         let owner_id = self
             .tokens
